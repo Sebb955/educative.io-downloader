@@ -1,4 +1,4 @@
-import { launch, PuppeteerLaunchOptions, Browser, Page } from 'puppeteer';
+import { launch, LaunchOptions, Browser, Page } from 'puppeteer';
 import { PageGotoParams, SaveAs } from './types';
 import { isExists } from './utils';
 import { Configuration } from './configuration';
@@ -18,7 +18,7 @@ export class ChromeBrowser {
     this._browser = null;
   }
 
-  private async launch(headless: boolean, args?: PuppeteerLaunchOptions): Promise<void> {
+  private async launch(headless: boolean, args?: LaunchOptions): Promise<void> {
     this._browser = await launch({
       ...args,
       userDataDir: this._userDataDir,
@@ -138,14 +138,63 @@ export class BrowserTab {
     }));
   }
 
-  private async saveAsMhtml(path: string) {
-    const cdp = await this._page.createCDPSession();
-    const { data } = await cdp.send('Page.captureSnapshot', { format: 'mhtml' });
-    await Bun.write(`${path}.mhtml`, data);
+  private async saveAsHtml(path: string) {
+    try {
+      await new Promise(resolve => setTimeout(resolve, 5000));
+
+      // Remove the cookie banner and fix the images
+      await this._page.evaluate(async () => {
+        document.querySelector('#onetrust-banner-sdk')?.remove();
+
+        // Fix the images
+        const images = document.querySelectorAll('img');
+        for (const img of Array.from(images)) {
+          const src = img.getAttribute('src');
+          if (src?.startsWith('/api/')) {
+            const response = await fetch('https://www.educative.io' + src);
+            const blob = await response.blob();
+            const reader = new FileReader();
+            reader.onload = () => {
+              img.src = reader.result as string;
+            };
+            reader.readAsDataURL(blob);
+          }
+
+          const srcset = img.getAttribute('srcset');
+          if (srcset) {
+            const urls = srcset.split(',').map(url => url.trim().split(' ')[0]);
+            // Processes an array of URLs, fetching and converting those that start with '/api/' to data URLs.
+            const newSrcset = await Promise.all(urls.map(async url => {
+              if (url.startsWith('/api/')) {
+                const response = await fetch('https://www.educative.io' + url);
+                const blob = await response.blob();
+                const reader = new FileReader();
+                return new Promise<string>((resolve) => {
+                  reader.onload = () => {
+                    resolve(reader.result as string);
+                  };
+                  reader.readAsDataURL(blob);
+                });
+              }
+              return url;
+            }));
+            img.setAttribute('srcset', newSrcset.join(', '));
+          }
+        }
+      });
+
+      // Wait a bit more for the new image URLs to load
+      await new Promise(resolve => setTimeout(resolve, 2000));
+
+      const html = await this._page.content();
+      await Bun.write(`${path}.html`, html);
+    } catch (error) {
+      console.error('Error saving page as HTML:', error);
+    }
   }
 
   async savePage(path: string) {
-    const pathWithExtension = this._saveAs === SaveAs.PDF ? `${path}.pdf` : `${path}.mhtml`;
+    const pathWithExtension = this._saveAs === SaveAs.PDF ? `${path}.pdf` : `${path}.html`;
     if ((await isExists(pathWithExtension))) {
       console.log('Page already exists. Path: ' + pathWithExtension);
       return;
@@ -155,7 +204,7 @@ export class BrowserTab {
       return this.saveAsPdf(path);
     }
 
-    return this.saveAsMhtml(path);
+    return this.saveAsHtml(path);
   }
 
   async goTo({ url, timeout = this._timeout, waitUntil = 'domcontentloaded' }: PageGotoParams) {

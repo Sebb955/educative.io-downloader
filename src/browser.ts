@@ -164,17 +164,22 @@ export class BrowserTab {
           if (srcset) {
             const urls = srcset.split(',').map(url => url.trim().split(' ')[0]);
             // Processes an array of URLs, fetching and converting those that start with '/api/' to data URLs.
-            const newSrcset = await Promise.all(urls.map(async url => {
+            const newSrcset = await Promise.allSettled(urls.map(async (url) => {
               if (url.startsWith('/api/')) {
-                const response = await fetch('https://www.educative.io' + url);
-                const blob = await response.blob();
-                const reader = new FileReader();
-                return new Promise<string>((resolve) => {
-                  reader.onload = () => {
-                    resolve(reader.result as string);
-                  };
-                  reader.readAsDataURL(blob);
-                });
+                try {
+                  const response = await fetch('https://www.educative.io' + url);
+                  const blob = await response.blob();
+                  const reader = new FileReader();
+                  return new Promise<string>((resolve) => {
+                    reader.onload = () => {
+                      resolve(reader.result as string);
+                    };
+                    reader.readAsDataURL(blob);
+                  });
+                } catch (error) {
+                  console.error("Error fetching URL:", url, error);
+                  throw error;
+                }
               }
               return url;
             }));
